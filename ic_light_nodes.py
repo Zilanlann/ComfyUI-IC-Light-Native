@@ -140,6 +140,13 @@ class ICLight:
                 for key in ic_model_state_dict
             }
         )
+
+        # release memory usage
+        ic_model_state_dict.clear()
+        del ic_model_state_dict
+        torch.cuda.empty_cache()
+        comfy.model_management.soft_empty_cache()
+
         return (work_model,)
 
 

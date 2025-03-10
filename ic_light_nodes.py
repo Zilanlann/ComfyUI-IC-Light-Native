@@ -25,9 +25,11 @@ class VAEEncodeArgMax(VAEEncode):
             vae.first_stage_model, AutoencoderKL
         ), "ArgMax only supported for AutoencoderKL"
         original_sample_mode = vae.first_stage_model.regularization.sample
-        vae.first_stage_model.regularization.sample = False
-        ret = super().encode(vae, pixels)
-        vae.first_stage_model.regularization.sample = original_sample_mode
+        try:
+            vae.first_stage_model.regularization.sample = False
+            ret = super().encode(vae, pixels)
+        finally:
+            vae.first_stage_model.regularization.sample = original_sample_mode
         return ret
 
 
@@ -48,6 +50,8 @@ class ICLightApplyMaskGrey:
     FUNCTION = "apply_mask"
 
     def apply_mask(self, image: torch.Tensor, alpha: torch.Tensor):
+        if not isinstance(alpha, torch.Tensor):
+            raise TypeError("Expected alpha to be a torch.Tensor")
         if alpha.ndim == 3:
             # [B, H, W] => [B, H, W, C=1]
             alpha = alpha.unsqueeze(-1)
@@ -78,6 +82,9 @@ class ICLight:
         ic_model: ModelPatcher,
         c_concat: dict,
     ) -> Tuple[ModelPatcher]:
+        if "samples" not in c_concat:
+            raise KeyError("Expected key 'samples' in c_concat")
+
         device = comfy.model_management.get_torch_device()
         dtype = comfy.model_management.unet_dtype()
         work_model = model.clone()
@@ -117,25 +124,27 @@ class ICLight:
 
         work_model.set_model_unet_function_wrapper(wrapper_func)
 
-        ic_model_state_dict = ic_model.model.diffusion_model.state_dict()
+        ic_model_state_dict = {
+            key: value.to(dtype=dtype, device=device)
+            for key, value in ic_model.model.diffusion_model.state_dict().items()
+        }
         work_model.add_patches(
             patches={
                 ("diffusion_model." + key): (
                     "diff",
                     [
-                        value.to(dtype=dtype, device=device),
-                        # The extra flag to pad the weight if the diff's shape is larger than the weight
+                        ic_model_state_dict[key],
                         {"pad_weight": key == "input_blocks.0.0.weight"},
                     ],
                 )
-                for key, value in ic_model_state_dict.items()
+                for key in ic_model_state_dict
             }
         )
         return (work_model,)
 
 
 NODE_CLASS_MAPPINGS = {
-    "ICLightAppply": ICLight,
+    "ICLightApply": ICLight,
     "ICLightApplyMaskGrey": ICLightApplyMaskGrey,
     "VAEEncodeArgMax": VAEEncodeArgMax,
 }
